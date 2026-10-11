@@ -1,0 +1,41 @@
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e .
+      - run: python -m unittest discover -s tests -t . -v
+      - name: init + status + systemd smoke (no agent installed)
+        run: |
+          wake init /tmp/qs
+          wake --config /tmp/qs/wake.toml status
+          wake --config /tmp/qs/wake.toml systemd --print > /dev/null
+
+  # Nightly: drift check against a real Muse Code binary. The echo provider needs no credentials.
+  muse-echo-smoke:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: curl -fsSL https://dev.meta.ai/install.sh | MUSE_NO_MODIFY_PATH=1 bash
+      - run: |
+          wake init /tmp/qs
+          PATH="$HOME/.local/bin:$PATH" wake --config /tmp/qs/wake.toml doctor --smoke
