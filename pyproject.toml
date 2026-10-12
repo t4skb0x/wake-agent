@@ -1,19 +1,18 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
 
 [project]
 name = "wake-agent"
-version = "0.1.0"
-description = "Wake a local CLI coding agent (Muse Code, Kimi Code, Claude Code, Codex) on a timer or event, log what it did, and report via Telegram, Slack, Discord, SMS or ntfy."
+version = "0.3.0-mailbox-core"
+description = "Wake a local CLI coding agent on timer, event, or mailbox message, log what it did, report back. Mailbox is now core - generic inbox with raw attachments, zero processing."
 readme = "README.md"
-requires-python = ">=3.11"
-license = { text = "MIT" }
-dependencies = []
-keywords = ["agents", "cli", "automation", "alerting", "monitoring", "qa"]
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["watchdog>=3.0"]
+authors = [{name="t4skb0x", email="t4skb0x@github"}]
 
 [project.scripts]
 wake = "wakeagent.cli:main"
+wake-agent = "wakeagent.mailbox:watch_loop"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

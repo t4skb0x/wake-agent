@@ -1,0 +1,15 @@
+
+[Unit]
+Description=wake-agent with mailbox core - reboot-proof
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wake-agent watch --config /srv/relay/wake.toml
+Restart=always
+RestartSec=2
+Environment=RELAY_BASE=/srv/relay/mailboxes
+Environment=RELAY_ACL=/srv/relay/acl.json
+
+[Install]
+WantedBy=default.target

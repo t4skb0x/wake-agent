@@ -1,108 +1,37 @@
-# wake.toml - everything wake-agent needs. Secrets are env var NAMES, never values.
 
-[wake]
-data_dir = "data"
-trigger_mode = "spawn"      # spawn (detached process) | systemd (systemctl --user start --no-block wake@JOB)
-stale_minutes = 15          # `wake check` pages when events sit undrained this long
-
-# ---------------------------------------------------------------- runners
-[runners.muse]
-type = "muse"
-# bin = "~/.local/bin/muse"
-# provider = "echo"                 # credential-free smoke mode; see `wake doctor --smoke`
-# fix_approval_mode = "on-request"  # approval mode used by mode = "fix" jobs
-
-# [runners.claude]
-# type = "claude"                   # experimental
-# [runners.codex]
-# type = "codex"                    # experimental
-# [runners.kimi]
-# type = "kimi"                     # experimental
-
-# --------------------------------------------------------------- channels
-[channels.console]
-type = "stdout"
-
-# [channels.telegram]
-# type = "telegram"
-# token_env = "TELEGRAM_BOT_TOKEN"
-# chat_id_env = "TELEGRAM_CHAT_ID"
-#
-# [channels.slack]
-# type = "slack"
-# webhook_env = "SLACK_WEBHOOK_URL"
-#
-# [channels.discord]
-# type = "discord"
-# webhook_env = "DISCORD_WEBHOOK_URL"
-#
-# [channels.sms]
-# type = "twilio"
-# sid_env = "TWILIO_SID"
-# token_env = "TWILIO_TOKEN"
-# from_env = "TWILIO_FROM"
-# to_env = "TWILIO_TO"
-#
-# [channels.phone]
-# type = "ntfy"
-# topic = "my-secret-topic-name"
-
-# Channel doctrine: chat carries everything; SMS is scarce and only for what must not be missed.
-[routing]
-info = ["console"]
-alert = ["console"]
-urgent = ["console"]        # e.g. ["telegram", "sms"]
-
-[reporting]
-dedup_hours = 6             # alert/urgent are deduped per key for this long
-max_per_hour = 30           # per channel, info/alert (urgent is never rate limited)
-
-# ------------------------------------------------------------------- jobs
-# A scheduled QA review: capture evidence with a script, then the agent judges it.
 [jobs.hello]
-runner = "muse"
+runner = "Muse"
 mode = "read-only"
 prompt = "prompts/hello.md"
-include = ["prompts/law.md"]
 capture = "scripts/capture-example.sh"
-schedule = "*-*-* 09:00:00"         # systemd OnCalendar (used by `wake systemd`)
-expect_every_hours = 26             # `wake check` pages if no good run in this window
-notify_ok = "info"                  # also tell me when everything is fine
+schedule = "*-*-* 09:00:00"
+expect_every_hours = 26
+notify_ok = "info"
 
-# An event-driven job: the watcher feeds it, the agent triages, the harness archives.
 [jobs.triage]
-runner = "muse"
+runner = "Muse"
 mode = "fix"
 events = true
 prompt = "prompts/triage.md"
-include = ["prompts/law.md"]
-max_attempts = 3
-# max_events = 25        # events per agent run; floods drain in batches (max_drain batches per wake)
-# max_actions = 10       # flag the run as a problem if the agent reports more state-changing actions
-# options = { pass_env = [] }   # channel secrets are withheld from the agent; opt specific vars back in here
 
-# [[watch]]
-# name = "unit-fail"
-# job = "triage"
-# source = "journal"
-# args = ["--user"]
-# pattern = "Failed with result"
-# class = "unit-fail"
-# key_regex = "(?P<key>[\\w.@-]+\\.service)"
-# dedup_hours = 6
-# recheck_cmd = "! systemctl --user --failed --quiet | grep -q ."   # auto-close if it already cleared
-# recheck_delay = 600
-#
-# [[watch]]
-# name = "app-errors"
-# job = "triage"
-# source = "file"
-# path = "/var/log/myapp/error.log"
-# pattern = "ERROR|CRITICAL"
+[[watch]]
+name = "unit-fail"
+job = "triage"
+source = "journal"
+pattern = "Failed with result"
+key_regex = "(?P<key>[\w.@-]+\.service)"
 
-# Mutes need an owner, a reason and an expiry. Muted lines are still recorded in data/muted.jsonl.
-# [[mute]]
-# pattern = "flaky-module"
-# until = "2026-12-01"
-# reason = "module under repair, owned by another agent"
-# owner = "alice"
+# NEW: Mailbox inbox - even generic needs inbox
+[jobs.inbox]
+runner = "Muse"
+mode = "fix"
+events = true
+prompt = "prompts/mailbox.md"
+capture = "scripts/capture-mailbox.sh"
+
+[[watch]]
+name = "mailbox-main"
+job = "inbox"
+source = "mailbox"
+base_dir = "/srv/relay/mailboxes"
+pattern = "*/pending/*.json"

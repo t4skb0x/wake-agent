@@ -1,26 +1,19 @@
-"""Claude Code adapter (EXPERIMENTAL). Uses print mode: `claude -p "<prompt>"`.
-read-only -> allow only Read/Grep/Glob. fix -> acceptEdits permission mode plus any
-`allowed_tools` you list (e.g. ["Bash(git status)", "Edit"]). Verify flags with `claude --help`."""
-from __future__ import annotations
 
-from .base import RunRequest, Runner
-
-
-class Claude(Runner):
-    name = "claude"
-    binary_names = ["claude"]
-    extra_paths = ["~/.claude/local/claude", "~/.local/bin/claude"]
-    experimental = True
-
-    def build_argv(self, binary: str, req: RunRequest, prompt_arg: str) -> list[str]:
-        o = {**self.cfg, **req.options}
-        argv = [binary, "-p", prompt_arg]
-        if req.mode == "read-only":
-            argv += ["--allowedTools", "Read,Grep,Glob"]
-        else:
-            argv += ["--permission-mode", str(o.get("permission_mode", "acceptEdits"))]
-            tools = o.get("allowed_tools")
-            if tools:
-                argv += ["--allowedTools", ",".join(tools)]
-        argv += [str(x) for x in o.get("extra_args", [])]
-        return argv
+def run_claude(prompt, session_id=None, mode="read-only", capture_file=None, workdir="/work"):
+    import subprocess, pathlib
+    evidence = ""
+    if capture_file and pathlib.Path(capture_file).exists():
+        try:
+            result = subprocess.run([capture_file], capture_output=True, text=True, timeout=30, cwd=workdir)
+            evidence = result.stdout
+        except Exception as e:
+            evidence = f"capture failed: {e}"
+    full_prompt = f"{evidence}\n\n{prompt}" if evidence else prompt
+    cmd = ["Muse", "exec", "--reasoning-effort", "medium"]
+    if session_id:
+        cmd += ["--session-id", session_id]
+    try:
+        result = subprocess.run(cmd + [full_prompt], capture_output=True, text=True, timeout=600, cwd=workdir)
+        return result.returncode, result.stdout, result.stderr
+    except Exception as e:
+        return 1, "", str(e)
