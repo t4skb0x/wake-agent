@@ -1,27 +1,11 @@
 
 """
-Mailbox watcher - new source type for trading silos, generic enough for public repo
-
-Watches /srv/relay/mailboxes/*/pending/*.json
-- Zero processing of attachments: raw files stored via shutil.copy2, no thumbnail, no OCR
-- Envelope contains attachment_folder + attachment_folder_container + attachments[]
-- Files never processed by system only read by agent in natural state like email/discord
-- X feed contains raw chart images, levels are on chart that trading agents read
-- PWA doesn't process any files, sends raw files through message like email/BBS
-
-Generic flow:
-  pending/*.json + attachments/<msg_id>/ raw -> claim -> processing -> done/failed
-
-For trading silos:
-  - Persistent session: /work/muse-session-id reused
-  - Wake-agent delivers prompt with path to attachment folder
-  - Agent reads raw chart.png via Read tool vision
-  - Least-privilege ACL: trainer only sees trainees prevents poison
+Mailbox watcher - core inbox, generic
+Zero processing of attachments: raw files stored via shutil.copy2
+Envelope contains attachment_folder + container path + attachments[]
+Files never processed by system only read by agent naturally like email/discord
 """
-import pathlib, json, time, shutil, os, re, sys, subprocess, uuid
-
-BASE_DEFAULT = pathlib.Path("/srv/relay/mailboxes")
-ACL_DEFAULT = pathlib.Path("/srv/relay/acl.json")
+import pathlib, json, time, shutil, sys, subprocess
 
 def load_acl(acl_path):
     if not pathlib.Path(acl_path).exists():
@@ -46,7 +30,7 @@ def build_attachments_list(envelope):
         return "No attachments - text only"
     lines=[]
     for a in atts:
-        lines.append(f"- {a.get('filename')} ({a.get('mime')}, {a.get('size')} bytes) raw: {a.get('container_path')} - zero system processing, read naturally like email/discord")
+        lines.append(f"- {a.get('filename')} ({a.get('mime')}, {a.get('size')} bytes) raw: {a.get('container_path')} - zero system processing, read naturally")
     return "\n".join(lines)
 
 def build_prompt(envelope, template=None):
@@ -57,15 +41,8 @@ def build_prompt(envelope, template=None):
 Attachments folder: {attachment_folder_container}
 {attachments_list}
 
-Read /work/AGENTS.md and /work/docs/*.md
-If attachments present, read raw files in natural state:
-- Chart images: use Read tool with image path, levels are on chart image that trading agents read (analyst writes line or two but levels are on chart)
-- PDFs/CSVs: read raw file, do not rely on system processing
-Files never get processed by system only read by you in natural state like email/discord.
-PWA is email/BBS style, zero processing, sends raw files through message.
-Do work per docs, update /work/strategy.py if training, log to /work/training.log
-Reply using: relay reply --message {msg_id} --from {agent} --body 'reply' [--attachments raw_files...]
-Session ID is persistent and must be preserved.
+Read docs if present. If attachments, read raw files in natural state like email/discord.
+Reply using: relay reply --message {msg_id} --from {agent} --body 'reply'
 """
     attachments_list = build_attachments_list(envelope)
     return template.format(
@@ -114,8 +91,6 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
     print(f"[mailbox] claimed {envelope.get('id')} {frm}->{to}")
 
     prompt = build_prompt(envelope, config.get("prompt_template"))
-
-    # Escape for bash
     safe_prompt = prompt.replace("'", "'"'"'")
     cmd = executor_template.format(
         agent=to,
@@ -138,7 +113,7 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
         result = subprocess.run(cmd, shell=True, timeout=600, capture_output=True, text=True)
         print(result.stdout[-3000:])
         if result.returncode != 0:
-            print(f"[mailbox] executor failed rc={result.returncode} {result.stderr[-1000:]}", file=sys.stderr)
+            print(f"[mailbox] failed rc={result.returncode} {result.stderr[-1000:]}", file=sys.stderr)
             failed_dir = claimed.parent.parent / "failed"
             failed_dir.mkdir(exist_ok=True)
             claimed.rename(failed_dir / claimed.name)
@@ -157,7 +132,6 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
         return False
 
 def recover_stale(base_dir, stale_after=300):
-    print(f"[mailbox] recover stale > {stale_after}s")
     for mb in pathlib.Path(base_dir).iterdir():
         if not mb.is_dir():
             continue
@@ -178,7 +152,6 @@ def recover_stale(base_dir, stale_after=300):
 def watch_loop(base_dir, config, acl, poll_interval=2, dry_run=False):
     base_dir = pathlib.Path(base_dir)
     executor_template = config.get("executors", {}).get("default") or "echo '{prompt}'"
-    # trading override: per-agent executors
     executors = config.get("executors", {})
 
     recover_stale(base_dir, config.get("recover_stale_after", 300))
@@ -186,7 +159,6 @@ def watch_loop(base_dir, config, acl, poll_interval=2, dry_run=False):
     try:
         from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
-        print("[mailbox] using watchdog inotify")
         class Handler(FileSystemEventHandler):
             def on_created(self, event):
                 if event.is_directory:
@@ -198,7 +170,6 @@ def watch_loop(base_dir, config, acl, poll_interval=2, dry_run=False):
                 p = pathlib.Path(event.src_path)
                 time.sleep(0.2)
                 if p.exists():
-                    # pick executor for this agent
                     try:
                         env = json.loads(p.read_text())
                         to = env.get("to")
@@ -236,7 +207,7 @@ def watch_loop(base_dir, config, acl, poll_interval=2, dry_run=False):
         observer.join()
         return
     except ImportError:
-        print("[mailbox] watchdog not available, poll loop")
+        pass
 
     while True:
         for mb in base_dir.iterdir():

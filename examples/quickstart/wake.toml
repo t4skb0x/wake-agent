@@ -6,22 +6,7 @@ prompt = "prompts/hello.md"
 capture = "scripts/capture-example.sh"
 schedule = "*-*-* 09:00:00"
 expect_every_hours = 26
-notify_ok = "info"
 
-[jobs.triage]
-runner = "Muse"
-mode = "fix"
-events = true
-prompt = "prompts/triage.md"
-
-[[watch]]
-name = "unit-fail"
-job = "triage"
-source = "journal"
-pattern = "Failed with result"
-key_regex = "(?P<key>[\w.@-]+\.service)"
-
-# NEW: Mailbox inbox - even generic needs inbox
 [jobs.inbox]
 runner = "Muse"
 mode = "fix"

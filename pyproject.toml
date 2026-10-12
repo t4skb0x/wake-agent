@@ -2,7 +2,7 @@
 [project]
 name = "wake-agent"
 version = "0.3.0-mailbox-core"
-description = "Wake a local CLI coding agent on timer, event, or mailbox message, log what it did, report back. Mailbox is now core - generic inbox with raw attachments, zero processing."
+description = "Wake a local CLI coding agent on timer, event, or mailbox message, log what it did, report back. Mailbox is now core - even generic state needs inbox with raw attachments, zero system processing."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
