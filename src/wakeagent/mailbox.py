@@ -45,18 +45,21 @@ Read docs if present. If attachments, read raw files in natural state like email
 Reply using: relay reply --message {msg_id} --from {agent} --body 'reply'
 """
     attachments_list = build_attachments_list(envelope)
-    return template.format(
-        **envelope,
-        attachments_list=attachments_list,
-        attachment_folder=envelope.get("attachment_folder",""),
-        attachment_folder_container=envelope.get("attachment_folder_container",""),
-        agent=envelope.get("to",""),
-        msg_id=envelope.get("id",""),
-        body=envelope.get("body",""),
-        thread_id=envelope.get("thread_id",""),
-        from_field=envelope.get("from",""),
-        from_=envelope.get("from","")
-    )
+    fmt_kwargs = {
+        "attachments_list": attachments_list,
+        "attachment_folder": envelope.get("attachment_folder", ""),
+        "attachment_folder_container": envelope.get("attachment_folder_container", ""),
+        "agent": envelope.get("to", ""),
+        "msg_id": envelope.get("id", ""),
+        "body": envelope.get("body", ""),
+        "thread_id": envelope.get("thread_id", ""),
+        "from": envelope.get("from", ""),
+        "from_field": envelope.get("from", ""),
+        "from_": envelope.get("from", ""),
+    }
+    for k, v in envelope.items():
+        fmt_kwargs.setdefault(k, v)
+    return template.format(**fmt_kwargs)
 
 def claim_message(msg_path):
     processing_dir = msg_path.parent.parent / "processing"
@@ -91,7 +94,7 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
     print(f"[mailbox] claimed {envelope.get('id')} {frm}->{to}")
 
     prompt = build_prompt(envelope, config.get("prompt_template"))
-    safe_prompt = prompt.replace("'", "'"'"'")
+    safe_prompt = prompt.replace("'", "'\"'\"'")
     cmd = executor_template.format(
         agent=to,
         from_=frm,
