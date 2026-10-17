@@ -5,24 +5,39 @@ Zero processing of attachments: raw files stored via shutil.copy2
 Envelope contains attachment_folder + container path + attachments[]
 Files never processed by system only read by agent naturally like email/discord
 """
-import pathlib, json, time, shutil, sys, subprocess
+import pathlib, json, os, time, shutil, shlex, sys
+
+from .worker import (
+    heartbeat_thread,
+    is_alive,
+    report_progress,
+    resolve_retries,
+    resolve_timeout,
+    resolve_worker,
+    run_with_retries,
+    worker_file,
+    write_heartbeat,
+    atomic_write_text,
+)
 
 def load_acl(acl_path):
     if not pathlib.Path(acl_path).exists():
         return {}
     try:
         data = json.loads(pathlib.Path(acl_path).read_text())
-        return data.get("principals", {})
-    except:
+        principals = data.get("principals", {})
+        return principals if isinstance(principals, dict) else {}
+    except Exception:
         return {}
 
 def can_send(acl, frm, to):
+    # Fail-closed: a missing, unreadable, or empty ACL denies everything.
     if not acl:
-        return True
-    p = acl.get(frm)
-    if not p:
         return False
-    return to in p.get("can_write_to", [])
+    p = acl.get(frm)
+    if not isinstance(p, dict):
+        return False
+    return to in (p.get("can_write_to", []) or [])
 
 def build_attachments_list(envelope):
     atts = envelope.get("attachments", [])
@@ -61,6 +76,20 @@ Reply using: relay reply --message {msg_id} --from {agent} --body 'reply'
         fmt_kwargs.setdefault(k, v)
     return template.format(**fmt_kwargs)
 
+def build_argv(executor_template, fmt_kwargs):
+    """Build argv from an executor template WITHOUT a shell.
+
+    The template is tokenized with shlex BEFORE substitution, then each
+    token is formatted, so envelope values (body, prompt, paths) always
+    land inside a single argv element. Shell metacharacters in message
+    content ($( ), backticks, ;, |, quotes) are data, never syntax.
+    """
+    tokens = shlex.split(executor_template, posix=True)
+    if not tokens:
+        raise ValueError("empty executor template")
+    return [t.format(**fmt_kwargs) for t in tokens]
+
+
 def claim_message(msg_path):
     processing_dir = msg_path.parent.parent / "processing"
     processing_dir.mkdir(parents=True, exist_ok=True)
@@ -80,7 +109,7 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
 
     frm = envelope.get("from")
     to = envelope.get("to")
-    if acl and not can_send(acl, frm, to):
+    if not can_send(acl, frm, to):
         print(f"[mailbox] ACL DENIED {frm} -> {to}", file=sys.stderr)
         failed_dir = msg_path.parent.parent / "failed"
         failed_dir.mkdir(exist_ok=True)
@@ -91,48 +120,87 @@ def process_one(msg_path, config, acl, executor_template, dry_run=False):
     if not claimed:
         return False
 
-    print(f"[mailbox] claimed {envelope.get('id')} {frm}->{to}")
+    worker = resolve_worker(config.get("worker_id"))
+    print(f"[mailbox] claimed {envelope.get('id')} {frm}->{to} worker={worker}")
 
     prompt = build_prompt(envelope, config.get("prompt_template"))
-    safe_prompt = prompt.replace("'", "'\"'\"'")
-    cmd = executor_template.format(
-        agent=to,
-        from_=frm,
-        msg_id=envelope.get("id"),
-        body=envelope.get("body",""),
-        thread_id=envelope.get("thread_id",""),
-        attachment_folder=envelope.get("attachment_folder",""),
-        attachment_folder_container=envelope.get("attachment_folder_container",""),
-        prompt=safe_prompt
-    )
-
-    if dry_run:
-        print(f"[DRY-RUN] would exec for {to}: {cmd[:500]}")
-        pending_dir = claimed.parent.parent / "pending"
-        claimed.rename(pending_dir / claimed.name)
-        return True
-
+    fmt_kwargs = {
+        "agent": to,
+        "msg_id": envelope.get("id"),
+        "body": envelope.get("body", ""),
+        "thread_id": envelope.get("thread_id", ""),
+        "attachment_folder": envelope.get("attachment_folder", ""),
+        "attachment_folder_container": envelope.get("attachment_folder_container", ""),
+        "from": frm,
+        "from_field": frm,
+        "from_": frm,
+        "prompt": prompt,
+    }
+    for k, v in envelope.items():
+        fmt_kwargs.setdefault(k, v)
     try:
-        result = subprocess.run(cmd, shell=True, timeout=600, capture_output=True, text=True)
-        print(result.stdout[-3000:])
-        if result.returncode != 0:
-            print(f"[mailbox] failed rc={result.returncode} {result.stderr[-1000:]}", file=sys.stderr)
-            failed_dir = claimed.parent.parent / "failed"
-            failed_dir.mkdir(exist_ok=True)
-            claimed.rename(failed_dir / claimed.name)
-            return False
-        else:
-            done_dir = claimed.parent.parent / "done"
-            done_dir.mkdir(exist_ok=True)
-            claimed.rename(done_dir / claimed.name)
-            print(f"[mailbox] {envelope.get('id')} -> done")
-            return True
-    except subprocess.TimeoutExpired:
-        print(f"[mailbox] timeout {envelope.get('id')} -> failed", file=sys.stderr)
+        argv = build_argv(executor_template, fmt_kwargs)
+    except (KeyError, ValueError) as e:
+        print(f"[mailbox] bad executor template: {e}", file=sys.stderr)
         failed_dir = claimed.parent.parent / "failed"
         failed_dir.mkdir(exist_ok=True)
         claimed.rename(failed_dir / claimed.name)
         return False
+
+    atomic_write_text(worker_file(claimed), json.dumps({
+        "msg_id": envelope.get("id"),
+        "worker": worker,
+        "pid": os.getpid(),
+        "cmd": " ".join(argv[:6]) + (" ..." if len(argv) > 6 else ""),
+        "started_at": int(time.time()),
+    }) + "\n")
+    write_heartbeat(claimed, envelope.get("id"), worker)
+
+    if dry_run:
+        print(f"[DRY-RUN] would exec for {to} worker={worker}: {argv[:6]}")
+        pending_dir = claimed.parent.parent / "pending"
+        claimed.rename(pending_dir / claimed.name)
+        return True
+
+    timeout = resolve_timeout(envelope, config)
+    max_retries, backoff_base, backoff_cap = resolve_retries(config)
+    report_progress(claimed, f"worker {worker} started (timeout={timeout:g}s)",
+                    envelope.get("id"))
+
+    stop, hb = heartbeat_thread(
+        claimed, envelope.get("id"), worker,
+        url=config.get("heartbeat_url"),
+        interval=float(config.get("heartbeat_interval", 60)),
+    )
+    try:
+        res = run_with_retries(argv, timeout=timeout,
+                               max_retries=max_retries,
+                               backoff_base=backoff_base,
+                               backoff_cap=backoff_cap)
+    finally:
+        stop.set()
+        hb.join(timeout=5)
+
+    print(res["output"][-3000:])
+    if res["returncode"] != 0:
+        reason = "timeout" if res["timed_out"] else f"rc={res['returncode']}"
+        print(f"[mailbox] failed {reason} after {res['attempts']} attempt(s) "
+              f"{res['output'][-1000:]}", file=sys.stderr)
+        report_progress(claimed,
+                        f"finished {reason} after {res['attempts']} attempt(s)",
+                        envelope.get("id"))
+        failed_dir = claimed.parent.parent / "failed"
+        failed_dir.mkdir(exist_ok=True)
+        claimed.rename(failed_dir / claimed.name)
+        return False
+    report_progress(claimed,
+                    f"finished ok after {res['attempts']} attempt(s)",
+                    envelope.get("id"))
+    done_dir = claimed.parent.parent / "done"
+    done_dir.mkdir(exist_ok=True)
+    claimed.rename(done_dir / claimed.name)
+    print(f"[mailbox] {envelope.get('id')} -> done worker={worker}")
+    return True
 
 def recover_stale(base_dir, stale_after=300):
     for mb in pathlib.Path(base_dir).iterdir():
@@ -142,6 +210,10 @@ def recover_stale(base_dir, stale_after=300):
         if not proc_dir.exists():
             continue
         for f in proc_dir.glob("*.json"):
+            if f.name.endswith((".heartbeat.json", ".worker.json")):
+                continue
+            if is_alive(f, stale_after=stale_after):
+                continue  # fresh worker heartbeat: alive, skip in sweep
             age = time.time() - f.stat().st_mtime
             if age > stale_after:
                 print(f"[recover] stale {f} age {age:.0f}s -> pending")
