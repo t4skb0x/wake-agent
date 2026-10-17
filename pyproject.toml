@@ -1,17 +1,17 @@
 
 [project]
 name = "wake-agent"
-version = "0.3.0-mailbox-core"
+version = "0.3.0"
 description = "Wake a local CLI coding agent on timer, event, or mailbox message, log what it did, report back. Mailbox is now core - even generic state needs inbox with raw attachments, zero system processing."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = ["watchdog>=3.0"]
 authors = [{name="t4skb0x", email="t4skb0x@github"}]
 
 [project.scripts]
 wake = "wakeagent.cli:main"
-wake-agent = "wakeagent.mailbox:watch_loop"
+wake-agent = "wakeagent.cli:main"
 
 [build-system]
 requires = ["hatchling"]
