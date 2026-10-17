@@ -1,2 +1,2 @@
-__version__ = '0.3.0-mailbox-core'
+__version__ = '0.3.0'
 # Mailbox is core - even generic state needs inbox
