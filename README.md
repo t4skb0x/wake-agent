@@ -106,7 +106,10 @@ Envelope:
 }
 ```
 
-Flow: any service writes JSON + raw files -> pending/ -> wake-agent claims pending->processing atomically -> builds prompt with body + attachment folder path -> exec -> done/failed
+Flow: any service writes JSON + raw files -> pending/ -> wake-agent claims pending->processing atomically -> builds prompt with body + attachment folder path -> exec (no shell, argv only) -> done/failed
+
+Worker knobs (top-level `wake.toml` keys; ACL at `acl_path` is fail-closed — missing/empty denies all):
+`task_timeout` (default 600s, per-message `timeout` overrides), `max_retries` (default 0) + `retry_backoff_base`/`retry_backoff_cap` (exponential backoff), `worker_id` (default hostname), `heartbeat_interval` (default 60s local sidecar + optional `heartbeat_url` POST). Fresh heartbeats skip `recover_stale`, like the PWA timeout sweep.
 
 Zero processing: relay never opens, converts, thumbnails, OCRs. Only agent reads raw like email.
 
